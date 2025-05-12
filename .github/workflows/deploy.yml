@@ -1,0 +1,91 @@
+name: Deploy to Minikube
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      deploy_environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+        - dev
+        - prod
+
+jobs:
+  build-and-deploy:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up environment
+        run: |
+          echo "Setting up environment variables..."
+          set DOCKER_USERNAME=undergroundehsan
+          echo "Using Docker Hub username: %DOCKER_USERNAME%"
+        shell: cmd
+
+      - name: Build and push Docker images
+        run: |
+          echo "Building and pushing Docker images..."
+          
+          :: Build frontend image
+          echo "Building frontend image..."
+          docker build -t %DOCKER_USERNAME%/book-management-frontend:latest -f Dockerfile .
+          
+          :: Build backend image
+          echo "Building backend image..."
+          docker build -t %DOCKER_USERNAME%/book-management-backend:latest -f backend/Dockerfile ./backend
+          
+          :: Login to Docker Hub
+          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u %DOCKER_USERNAME% --password-stdin
+          
+          :: Push images to Docker Hub
+          echo "Pushing images to Docker Hub..."
+          docker push %DOCKER_USERNAME%/book-management-frontend:latest
+          docker push %DOCKER_USERNAME%/book-management-backend:latest
+        shell: cmd
+
+      - name: Deploy to Minikube
+        run: |
+          echo "Deploying to Minikube..."
+          
+          :: Ensure Minikube is running
+          minikube status || minikube start
+          
+          :: Create a temporary deployment file with the Docker Hub username
+          powershell -Command "(Get-Content deployment.yaml) -replace '\$\{DOCKER_USERNAME\}', '%DOCKER_USERNAME%' | Set-Content deployment-with-dockerhub.yaml"
+          
+          :: Apply Kubernetes resources
+          kubectl apply -f configmap.yaml
+          kubectl apply -f secrets.yaml
+          kubectl apply -f pvc.yaml
+          kubectl apply -f service.yaml
+          kubectl apply -f deployment-with-dockerhub.yaml
+          
+          :: Clean up
+          del deployment-with-dockerhub.yaml
+          
+          :: Check deployment status
+          kubectl get deployments
+        shell: cmd
+
+      - name: Verify deployment
+        run: |
+          echo "Verifying deployment..."
+          
+          :: Wait for deployments to be available
+          kubectl wait --for=condition=available --timeout=300s deployment/frontend
+          kubectl wait --for=condition=available --timeout=300s deployment/backend
+          
+          echo "Deployment verified successfully!"
+          
+          :: Print access information
+          echo "To access the application, run: kubectl port-forward svc/frontend-service 3000:3000"
+          echo "Then open your browser and navigate to http://localhost:3000"
+        shell: cmd 
