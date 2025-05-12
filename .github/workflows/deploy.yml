@@ -23,12 +23,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Set up environment
-        run: |
-          echo "Setting up environment variables..."
-          set DOCKER_USERNAME=undergroundehsan
-          echo "Using Docker Hub username: %DOCKER_USERNAME%"
-        shell: cmd
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: undergroundehsan
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Build and push Docker images
         run: |
@@ -36,19 +35,16 @@ jobs:
           
           :: Build frontend image
           echo "Building frontend image..."
-          docker build -t %DOCKER_USERNAME%/book-management-frontend:latest -f Dockerfile .
+          docker build -t undergroundehsan/book-management-frontend:latest -f Dockerfile .
           
           :: Build backend image
           echo "Building backend image..."
-          docker build -t %DOCKER_USERNAME%/book-management-backend:latest -f backend/Dockerfile ./backend
-          
-          :: Login to Docker Hub
-          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u %DOCKER_USERNAME% --password-stdin
+          docker build -t undergroundehsan/book-management-backend:latest -f backend/Dockerfile ./backend
           
           :: Push images to Docker Hub
           echo "Pushing images to Docker Hub..."
-          docker push %DOCKER_USERNAME%/book-management-frontend:latest
-          docker push %DOCKER_USERNAME%/book-management-backend:latest
+          docker push undergroundehsan/book-management-frontend:latest
+          docker push undergroundehsan/book-management-backend:latest
         shell: cmd
 
       - name: Deploy to Minikube
@@ -59,7 +55,7 @@ jobs:
           minikube status || minikube start
           
           :: Create a temporary deployment file with the Docker Hub username
-          powershell -Command "(Get-Content deployment.yaml) -replace '\$\{DOCKER_USERNAME\}', '%DOCKER_USERNAME%' | Set-Content deployment-with-dockerhub.yaml"
+          powershell -Command "(Get-Content deployment.yaml) -replace '\$\{DOCKER_USERNAME\}', 'undergroundehsan' | Set-Content deployment-with-dockerhub.yaml"
           
           :: Apply Kubernetes resources
           kubectl apply -f configmap.yaml
