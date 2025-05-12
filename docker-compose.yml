@@ -1,0 +1,69 @@
+version: '3'
+
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://backend:5000/api
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "5000:5000"
+    environment:
+      - PORT=5000
+      # Use MongoDB Atlas as primary connection
+      - MONGODB_URI=mongodb+srv://i222724:CALLOFDUTY@cluster0.cry11.mongodb.net/bookmanagement
+      # Fallback to local MongoDB if Atlas is unreachable
+      - MONGODB_URI_FALLBACK=mongodb://mongodb:27017/bookmanagement
+      - JWT_SECRET=yoursecretkey123456
+    networks:
+      - app-network
+    restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:5000/api/test"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      - mongodb
+
+  # Local MongoDB instance as fallback
+  mongodb:
+    image: mongo:latest
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - app-network
+    restart: unless-stopped
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  mongodb_data: 
