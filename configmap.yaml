@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: book-management-config
+  labels:
+    app: book-management
+data:
+  API_TIMEOUT: "10000"
+  LOG_LEVEL: "info"
+  FRONTEND_URL: "http://frontend-service"
+  NODE_ENV: "production" 

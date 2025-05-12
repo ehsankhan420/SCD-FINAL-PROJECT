@@ -1,0 +1,147 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  labels:
+    app: book-management
+    tier: frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: book-management
+      tier: frontend
+  template:
+    metadata:
+      labels:
+        app: book-management
+        tier: frontend
+    spec:
+      containers:
+      - name: frontend
+        image: ${DOCKER_USERNAME}/book-management-frontend:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3000
+        env:
+        - name: NEXT_PUBLIC_API_URL
+          value: "http://backend-service:5000/api"
+        resources:
+          limits:
+            cpu: "0.5"
+            memory: "512Mi"
+          requests:
+            cpu: "0.2"
+            memory: "256Mi"
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels:
+    app: book-management
+    tier: backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: book-management
+      tier: backend
+  template:
+    metadata:
+      labels:
+        app: book-management
+        tier: backend
+    spec:
+      containers:
+      - name: backend
+        image: ${DOCKER_USERNAME}/book-management-backend:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 5000
+        env:
+        - name: PORT
+          value: "5000"
+        - name: MONGODB_URI
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-secrets
+              key: uri
+        - name: MONGODB_URI_FALLBACK
+          value: "mongodb://mongodb-service:27017/bookmanagement"
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: jwt-secret
+              key: token
+        resources:
+          limits:
+            cpu: "0.5"
+            memory: "512Mi"
+          requests:
+            cpu: "0.2"
+            memory: "256Mi"
+        readinessProbe:
+          httpGet:
+            path: /api/test
+            port: 5000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /api/test
+            port: 5000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb
+  labels:
+    app: book-management
+    tier: database
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: book-management
+      tier: database
+  template:
+    metadata:
+      labels:
+        app: book-management
+        tier: database
+    spec:
+      containers:
+      - name: mongodb
+        image: mongo:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 27017
+        volumeMounts:
+        - name: mongodb-data
+          mountPath: /data/db
+        resources:
+          limits:
+            cpu: "0.5"
+            memory: "1Gi"
+          requests:
+            cpu: "0.2"
+            memory: "512Mi"
+      volumes:
+      - name: mongodb-data
+        persistentVolumeClaim:
+          claimName: mongodb-pvc 
