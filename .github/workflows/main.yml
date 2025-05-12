@@ -58,49 +58,58 @@ jobs:
           docker push undergroundehsan/book-management-backend:latest
         shell: cmd
 
-      - name: Reset and start Minikube
+      - name: Reset and start Minikube with proper DNS
         run: |
           echo "Stopping any running Minikube..."
           minikube stop
           
           echo "Deleting previous Minikube cluster..."
-          minikube delete
+          minikube delete --all --purge
           
-          echo "Starting Minikube with fewer resources..."
-          minikube start --memory=2048 --cpus=2 --driver=docker
+          echo "Cleaning Docker containers..."
+          docker ps -a | findstr minikube && docker rm -f $(docker ps -a | findstr minikube | awk '{print $1}')
+          
+          echo "Setting up Minikube with proper DNS configuration..."
+          minikube start --memory=2048 --cpus=2 --driver=docker --dns-domain="cluster.local" --addons=dashboard --addons=ingress --addons=ingress-dns
           
           echo "Checking Minikube status..."
           minikube status
           
-          echo "Setting kubectl context to minikube..."
+          echo "Verifying DNS configuration..."
+          minikube ssh -- cat /etc/resolv.conf
+          
+          echo "Updating kubectl context..."
           minikube update-context
           
-          echo "Waiting for Minikube to be ready..."
-          timeout /t 30
+          echo "Waiting for Minikube to be ready (45 seconds)..."
+          ping -n 45 127.0.0.1 > nul
+          
+          echo "Verifying API server accessibility..."
+          minikube kubectl -- cluster-info
         shell: cmd
         continue-on-error: true
 
-      - name: Deploy simple app to Minikube
+      - name: Test Minikube with simple app
         run: |
-          echo "Deploying basic workload to Minikube..."
+          echo "Testing Minikube with a basic nginx deployment..."
           
           :: Create a simple deployment
           echo apiVersion: apps/v1 > simple-deployment.yaml
           echo kind: Deployment >> simple-deployment.yaml
           echo metadata: >> simple-deployment.yaml
-          echo   name: frontend >> simple-deployment.yaml
+          echo   name: test-nginx >> simple-deployment.yaml
           echo spec: >> simple-deployment.yaml
           echo   replicas: 1 >> simple-deployment.yaml
           echo   selector: >> simple-deployment.yaml
           echo     matchLabels: >> simple-deployment.yaml
-          echo       app: frontend >> simple-deployment.yaml
+          echo       app: test-nginx >> simple-deployment.yaml
           echo   template: >> simple-deployment.yaml
           echo     metadata: >> simple-deployment.yaml
           echo       labels: >> simple-deployment.yaml
-          echo         app: frontend >> simple-deployment.yaml
+          echo         app: test-nginx >> simple-deployment.yaml
           echo     spec: >> simple-deployment.yaml
           echo       containers: >> simple-deployment.yaml
-          echo       - name: frontend >> simple-deployment.yaml
+          echo       - name: nginx >> simple-deployment.yaml
           echo         image: nginx:latest >> simple-deployment.yaml
           echo         ports: >> simple-deployment.yaml
           echo         - containerPort: 80 >> simple-deployment.yaml
@@ -109,44 +118,228 @@ jobs:
           echo apiVersion: v1 > simple-service.yaml
           echo kind: Service >> simple-service.yaml
           echo metadata: >> simple-service.yaml
-          echo   name: frontend-service >> simple-service.yaml
+          echo   name: test-nginx-service >> simple-service.yaml
           echo spec: >> simple-service.yaml
           echo   selector: >> simple-service.yaml
-          echo     app: frontend >> simple-service.yaml
+          echo     app: test-nginx >> simple-service.yaml
           echo   ports: >> simple-service.yaml
           echo   - port: 80 >> simple-service.yaml
           echo     targetPort: 80 >> simple-service.yaml
           echo   type: ClusterIP >> simple-service.yaml
           
-          :: Apply using minikube kubectl
-          echo "Applying deployments using minikube kubectl..."
+          :: Apply using minikube kubectl and check results
+          echo "Applying test deployment using minikube kubectl..."
           minikube kubectl -- apply -f simple-deployment.yaml
+          
+          echo "Verifying test deployment was created..."
+          minikube kubectl -- get deployments
+          
+          echo "Applying test service..."
           minikube kubectl -- apply -f simple-service.yaml
           
-          echo "Checking deployment status..."
-          minikube kubectl -- get deployments
-          minikube kubectl -- get pods
+          echo "Verifying test service was created..."
           minikube kubectl -- get services
           
-          echo "Deployment completed!"
+          echo "Waiting for pod to be created (30 seconds)..."
+          ping -n 30 127.0.0.1 > nul
+          
+          echo "Checking pod status..."
+          minikube kubectl -- get pods
+          
+          echo "Test deployment completed! Minikube is working properly."
         shell: cmd
         continue-on-error: true
 
-      - name: Verify deployment
+      - name: Deploy book management system
         run: |
-          echo "Verifying deployment..."
+          echo "Deploying Book Management System to Minikube..."
+          
+          :: Create MongoDB deployment
+          echo "Creating MongoDB deployment..."
+          echo apiVersion: apps/v1 > mongodb-deployment.yaml
+          echo kind: Deployment >> mongodb-deployment.yaml
+          echo metadata: >> mongodb-deployment.yaml
+          echo   name: mongodb >> mongodb-deployment.yaml
+          echo   labels: >> mongodb-deployment.yaml
+          echo     app: book-management >> mongodb-deployment.yaml
+          echo     tier: database >> mongodb-deployment.yaml
+          echo spec: >> mongodb-deployment.yaml
+          echo   replicas: 1 >> mongodb-deployment.yaml
+          echo   selector: >> mongodb-deployment.yaml
+          echo     matchLabels: >> mongodb-deployment.yaml
+          echo       app: book-management >> mongodb-deployment.yaml
+          echo       tier: database >> mongodb-deployment.yaml
+          echo   template: >> mongodb-deployment.yaml
+          echo     metadata: >> mongodb-deployment.yaml
+          echo       labels: >> mongodb-deployment.yaml
+          echo         app: book-management >> mongodb-deployment.yaml
+          echo         tier: database >> mongodb-deployment.yaml
+          echo     spec: >> mongodb-deployment.yaml
+          echo       containers: >> mongodb-deployment.yaml
+          echo       - name: mongodb >> mongodb-deployment.yaml
+          echo         image: mongo:latest >> mongodb-deployment.yaml
+          echo         ports: >> mongodb-deployment.yaml
+          echo         - containerPort: 27017 >> mongodb-deployment.yaml
+          
+          echo "Applying MongoDB deployment..."
+          minikube kubectl -- apply -f mongodb-deployment.yaml
+          
+          :: Create MongoDB service
+          echo "Creating MongoDB service..."
+          echo apiVersion: v1 > mongodb-service.yaml
+          echo kind: Service >> mongodb-service.yaml
+          echo metadata: >> mongodb-service.yaml
+          echo   name: mongodb-service >> mongodb-service.yaml
+          echo spec: >> mongodb-service.yaml
+          echo   selector: >> mongodb-service.yaml
+          echo     app: book-management >> mongodb-service.yaml
+          echo     tier: database >> mongodb-service.yaml
+          echo   ports: >> mongodb-service.yaml
+          echo   - port: 27017 >> mongodb-service.yaml
+          echo     targetPort: 27017 >> mongodb-service.yaml
+          echo   type: ClusterIP >> mongodb-service.yaml
+          
+          echo "Applying MongoDB service..."
+          minikube kubectl -- apply -f mongodb-service.yaml
+          
+          echo "Waiting for MongoDB to start (30 seconds)..."
+          ping -n 30 127.0.0.1 > nul
+          
+          :: Create backend deployment
+          echo "Creating backend deployment..."
+          echo apiVersion: apps/v1 > backend-deployment.yaml
+          echo kind: Deployment >> backend-deployment.yaml
+          echo metadata: >> backend-deployment.yaml
+          echo   name: backend >> backend-deployment.yaml
+          echo   labels: >> backend-deployment.yaml
+          echo     app: book-management >> backend-deployment.yaml
+          echo     tier: backend >> backend-deployment.yaml
+          echo spec: >> backend-deployment.yaml
+          echo   replicas: 1 >> backend-deployment.yaml
+          echo   selector: >> backend-deployment.yaml
+          echo     matchLabels: >> backend-deployment.yaml
+          echo       app: book-management >> backend-deployment.yaml
+          echo       tier: backend >> backend-deployment.yaml
+          echo   template: >> backend-deployment.yaml
+          echo     metadata: >> backend-deployment.yaml
+          echo       labels: >> backend-deployment.yaml
+          echo         app: book-management >> backend-deployment.yaml
+          echo         tier: backend >> backend-deployment.yaml
+          echo     spec: >> backend-deployment.yaml
+          echo       containers: >> backend-deployment.yaml
+          echo       - name: backend >> backend-deployment.yaml
+          echo         image: undergroundehsan/book-management-backend:latest >> backend-deployment.yaml
+          echo         ports: >> backend-deployment.yaml
+          echo         - containerPort: 5000 >> backend-deployment.yaml
+          echo         env: >> backend-deployment.yaml
+          echo         - name: MONGODB_URI >> backend-deployment.yaml
+          echo           value: "mongodb://mongodb-service:27017/bookmanagement" >> backend-deployment.yaml
+          
+          echo "Applying backend deployment..."
+          minikube kubectl -- apply -f backend-deployment.yaml
+          
+          :: Create backend service
+          echo "Creating backend service..."
+          echo apiVersion: v1 > backend-service.yaml
+          echo kind: Service >> backend-service.yaml
+          echo metadata: >> backend-service.yaml
+          echo   name: backend-service >> backend-service.yaml
+          echo spec: >> backend-service.yaml
+          echo   selector: >> backend-service.yaml
+          echo     app: book-management >> backend-service.yaml
+          echo     tier: backend >> backend-service.yaml
+          echo   ports: >> backend-service.yaml
+          echo   - port: 5000 >> backend-service.yaml
+          echo     targetPort: 5000 >> backend-service.yaml
+          echo   type: ClusterIP >> backend-service.yaml
+          
+          echo "Applying backend service..."
+          minikube kubectl -- apply -f backend-service.yaml
+          
+          echo "Waiting for backend to start (30 seconds)..."
+          ping -n 30 127.0.0.1 > nul
+          
+          :: Create frontend deployment
+          echo "Creating frontend deployment..."
+          echo apiVersion: apps/v1 > frontend-deployment.yaml
+          echo kind: Deployment >> frontend-deployment.yaml
+          echo metadata: >> frontend-deployment.yaml
+          echo   name: frontend >> frontend-deployment.yaml
+          echo   labels: >> frontend-deployment.yaml
+          echo     app: book-management >> frontend-deployment.yaml
+          echo     tier: frontend >> frontend-deployment.yaml
+          echo spec: >> frontend-deployment.yaml
+          echo   replicas: 1 >> frontend-deployment.yaml
+          echo   selector: >> frontend-deployment.yaml
+          echo     matchLabels: >> frontend-deployment.yaml
+          echo       app: book-management >> frontend-deployment.yaml
+          echo       tier: frontend >> frontend-deployment.yaml
+          echo   template: >> frontend-deployment.yaml
+          echo     metadata: >> frontend-deployment.yaml
+          echo       labels: >> frontend-deployment.yaml
+          echo         app: book-management >> frontend-deployment.yaml
+          echo         tier: frontend >> frontend-deployment.yaml
+          echo     spec: >> frontend-deployment.yaml
+          echo       containers: >> frontend-deployment.yaml
+          echo       - name: frontend >> frontend-deployment.yaml
+          echo         image: undergroundehsan/book-management-frontend:latest >> frontend-deployment.yaml
+          echo         ports: >> frontend-deployment.yaml
+          echo         - containerPort: 3000 >> frontend-deployment.yaml
+          echo         env: >> frontend-deployment.yaml
+          echo         - name: NEXT_PUBLIC_API_URL >> frontend-deployment.yaml
+          echo           value: "http://backend-service:5000/api" >> frontend-deployment.yaml
+          
+          echo "Applying frontend deployment..."
+          minikube kubectl -- apply -f frontend-deployment.yaml
+          
+          :: Create frontend service
+          echo "Creating frontend service..."
+          echo apiVersion: v1 > frontend-service.yaml
+          echo kind: Service >> frontend-service.yaml
+          echo metadata: >> frontend-service.yaml
+          echo   name: frontend-service >> frontend-service.yaml
+          echo spec: >> frontend-service.yaml
+          echo   selector: >> frontend-service.yaml
+          echo     app: book-management >> frontend-service.yaml
+          echo     tier: frontend >> frontend-service.yaml
+          echo   ports: >> frontend-service.yaml
+          echo   - port: 3000 >> frontend-service.yaml
+          echo     targetPort: 3000 >> frontend-service.yaml
+          echo   type: NodePort >> frontend-service.yaml
+          
+          echo "Applying frontend service..."
+          minikube kubectl -- apply -f frontend-service.yaml
+          
+          echo "Book Management System deployment commands completed!"
+        shell: cmd
+        continue-on-error: true
+
+      - name: Verify final deployment
+        run: |
+          echo "Verifying Book Management System deployment..."
           minikube kubectl -- get all
           
-          echo "Getting Pod details..."
+          echo "Waiting for all pods to be ready (60 seconds)..."
+          ping -n 60 127.0.0.1 > nul
+          
+          echo "Checking pod status after waiting..."
           minikube kubectl -- get pods
           
-          echo "Minikube IP address:"
-          minikube ip
+          echo "Checking details of any pods not in Running state..."
+          FOR /F "tokens=1" %%i IN ('minikube kubectl -- get pods --no-headers ^| findstr -v "Running"') DO (
+            echo "Describing pod %%i:"
+            minikube kubectl -- describe pod %%i
+            echo "Logs for pod %%i:"
+            minikube kubectl -- logs %%i --tail=50
+          )
+          
+          echo "Creating service URL for frontend access..."
+          minikube service frontend-service --url
           
           echo "Deployment verification completed!"
           
-          echo "To access the application, use:"
-          echo "minikube service frontend-service --url"
+          echo "To access the application locally, run:"
+          echo "minikube service frontend-service"
         shell: cmd
         continue-on-error: true
 
@@ -156,6 +349,11 @@ jobs:
           echo "Collecting Minikube logs for debugging..."
           minikube logs > minikube-logs.txt
           echo "Logs saved to minikube-logs.txt"
-          type minikube-logs.txt
+          
+          echo "Collecting Kubernetes component status..."
+          minikube kubectl -- get componentstatuses
+          
+          echo "Checking Docker Desktop resources..."
+          docker info
         shell: cmd
         continue-on-error: true 
