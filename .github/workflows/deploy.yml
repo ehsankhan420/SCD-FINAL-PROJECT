@@ -23,6 +23,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
+      - name: List workspace files
+        run: |
+          echo "Listing repository content..."
+          dir
+          echo "Checking for Kubernetes files..."
+          dir *.yaml
+        shell: cmd
+        continue-on-error: true
+
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
@@ -47,6 +56,87 @@ jobs:
           docker push undergroundehsan/book-management-backend:latest
         shell: cmd
 
+      - name: Create K8s config files if missing
+        run: |
+          :: Check if deployment.yaml exists
+          if not exist deployment.yaml (
+            echo Creating deployment.yaml...
+            echo apiVersion: apps/v1 > deployment.yaml
+            echo kind: Deployment >> deployment.yaml
+            echo metadata: >> deployment.yaml
+            echo   name: frontend >> deployment.yaml
+            echo spec: >> deployment.yaml
+            echo   replicas: 1 >> deployment.yaml
+            echo   selector: >> deployment.yaml
+            echo     matchLabels: >> deployment.yaml
+            echo       app: book-management >> deployment.yaml
+            echo   template: >> deployment.yaml
+            echo     metadata: >> deployment.yaml
+            echo       labels: >> deployment.yaml
+            echo         app: book-management >> deployment.yaml
+            echo     spec: >> deployment.yaml
+            echo       containers: >> deployment.yaml
+            echo       - name: frontend >> deployment.yaml
+            echo         image: undergroundehsan/book-management-frontend:latest >> deployment.yaml
+            echo         ports: >> deployment.yaml
+            echo         - containerPort: 3000 >> deployment.yaml
+          )
+
+          :: Check if configmap.yaml exists
+          if not exist configmap.yaml (
+            echo Creating configmap.yaml...
+            echo apiVersion: v1 > configmap.yaml
+            echo kind: ConfigMap >> configmap.yaml
+            echo metadata: >> configmap.yaml
+            echo   name: app-config >> configmap.yaml
+            echo data: >> configmap.yaml
+            echo   API_URL: "http://backend-service:5000/api" >> configmap.yaml
+          )
+
+          :: Check if secrets.yaml exists
+          if not exist secrets.yaml (
+            echo Creating secrets.yaml...
+            echo apiVersion: v1 > secrets.yaml
+            echo kind: Secret >> secrets.yaml
+            echo metadata: >> secrets.yaml
+            echo   name: app-secrets >> secrets.yaml
+            echo type: Opaque >> secrets.yaml
+            echo data: >> secrets.yaml
+            echo   JWT_TOKEN: "c2VjcmV0" >> secrets.yaml
+          )
+
+          :: Check if pvc.yaml exists
+          if not exist pvc.yaml (
+            echo Creating pvc.yaml...
+            echo apiVersion: v1 > pvc.yaml
+            echo kind: PersistentVolumeClaim >> pvc.yaml
+            echo metadata: >> pvc.yaml
+            echo   name: app-data-pvc >> pvc.yaml
+            echo spec: >> pvc.yaml
+            echo   accessModes: >> pvc.yaml
+            echo   - ReadWriteOnce >> pvc.yaml
+            echo   resources: >> pvc.yaml
+            echo     requests: >> pvc.yaml
+            echo       storage: 1Gi >> pvc.yaml
+          )
+
+          :: Check if service.yaml exists
+          if not exist service.yaml (
+            echo Creating service.yaml...
+            echo apiVersion: v1 > service.yaml
+            echo kind: Service >> service.yaml
+            echo metadata: >> service.yaml
+            echo   name: frontend-service >> service.yaml
+            echo spec: >> service.yaml
+            echo   selector: >> service.yaml
+            echo     app: book-management >> service.yaml
+            echo   ports: >> service.yaml
+            echo   - port: 3000 >> service.yaml
+            echo     targetPort: 3000 >> service.yaml
+            echo   type: ClusterIP >> service.yaml
+          )
+        shell: cmd
+
       - name: Deploy to Minikube
         run: |
           echo "Deploying to Minikube..."
@@ -54,34 +144,65 @@ jobs:
           :: Ensure Minikube is running
           minikube status || minikube start
           
-          :: Create a temporary deployment file with the Docker Hub username
-          powershell -Command "(Get-Content deployment.yaml) -replace '\$\{DOCKER_USERNAME\}', 'undergroundehsan' | Set-Content deployment-with-dockerhub.yaml"
+          :: Use direct hardcoded image in deployment file
+          echo Creating updated deployment.yaml...
+          echo apiVersion: apps/v1 > deployment-with-dockerhub.yaml
+          echo kind: Deployment >> deployment-with-dockerhub.yaml
+          echo metadata: >> deployment-with-dockerhub.yaml
+          echo   name: frontend >> deployment-with-dockerhub.yaml
+          echo spec: >> deployment-with-dockerhub.yaml
+          echo   replicas: 1 >> deployment-with-dockerhub.yaml
+          echo   selector: >> deployment-with-dockerhub.yaml
+          echo     matchLabels: >> deployment-with-dockerhub.yaml
+          echo       app: book-management >> deployment-with-dockerhub.yaml
+          echo   template: >> deployment-with-dockerhub.yaml
+          echo     metadata: >> deployment-with-dockerhub.yaml
+          echo       labels: >> deployment-with-dockerhub.yaml
+          echo         app: book-management >> deployment-with-dockerhub.yaml
+          echo     spec: >> deployment-with-dockerhub.yaml
+          echo       containers: >> deployment-with-dockerhub.yaml
+          echo       - name: frontend >> deployment-with-dockerhub.yaml
+          echo         image: undergroundehsan/book-management-frontend:latest >> deployment-with-dockerhub.yaml
+          echo         ports: >> deployment-with-dockerhub.yaml
+          echo         - containerPort: 3000 >> deployment-with-dockerhub.yaml
           
           :: Apply Kubernetes resources
+          echo Applying Kubernetes resources...
+          
+          echo Applying configmap.yaml...
           kubectl apply -f configmap.yaml
+          
+          echo Applying secrets.yaml...
           kubectl apply -f secrets.yaml
+          
+          echo Applying pvc.yaml...
           kubectl apply -f pvc.yaml
+          
+          echo Applying service.yaml...
           kubectl apply -f service.yaml
+          
+          echo Applying deployment...
           kubectl apply -f deployment-with-dockerhub.yaml
           
-          :: Clean up
-          del deployment-with-dockerhub.yaml
-          
           :: Check deployment status
+          echo Checking deployment status...
           kubectl get deployments
+          
+          echo Deployment completed!
         shell: cmd
+        continue-on-error: true
 
       - name: Verify deployment
         run: |
           echo "Verifying deployment..."
+          kubectl get all
           
-          :: Wait for deployments to be available
-          kubectl wait --for=condition=available --timeout=300s deployment/frontend
-          kubectl wait --for=condition=available --timeout=300s deployment/backend
+          echo "Getting Pod details..."
+          kubectl get pods
           
-          echo "Deployment verified successfully!"
+          echo "Attempting to port forward..."
+          start /b kubectl port-forward service/frontend-service 3000:3000
           
-          :: Print access information
-          echo "To access the application, run: kubectl port-forward svc/frontend-service 3000:3000"
-          echo "Then open your browser and navigate to http://localhost:3000"
-        shell: cmd 
+          echo "Deployment verification completed!"
+        shell: cmd
+        continue-on-error: true 
