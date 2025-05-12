@@ -56,6 +56,24 @@ jobs:
           docker push undergroundehsan/book-management-backend:latest
         shell: cmd
 
+      - name: Reset and configure Minikube
+        run: |
+          echo "Stopping and resetting Minikube..."
+          minikube stop
+          minikube delete
+          
+          echo "Starting Minikube with more resources..."
+          minikube start --memory=4096 --cpus=2 --disk-size=20g
+          
+          echo "Checking Minikube status..."
+          minikube status
+          
+          echo "Adding Docker images to Minikube..."
+          minikube image load undergroundehsan/book-management-frontend:latest
+          minikube image load undergroundehsan/book-management-backend:latest
+        shell: cmd
+        continue-on-error: true
+
       - name: Create K8s config files if missing
         run: |
           :: Check if deployment.yaml exists
@@ -141,54 +159,22 @@ jobs:
         run: |
           echo "Deploying to Minikube..."
           
-          :: Ensure Minikube is running
-          minikube status || minikube start
+          :: Use simpler deployment for testing
+          echo Creating simple frontend deployment...
+          kubectl create deployment frontend --image=undergroundehsan/book-management-frontend:latest --replicas=1
           
-          :: Use direct hardcoded image in deployment file
-          echo Creating updated deployment.yaml...
-          echo apiVersion: apps/v1 > deployment-with-dockerhub.yaml
-          echo kind: Deployment >> deployment-with-dockerhub.yaml
-          echo metadata: >> deployment-with-dockerhub.yaml
-          echo   name: frontend >> deployment-with-dockerhub.yaml
-          echo spec: >> deployment-with-dockerhub.yaml
-          echo   replicas: 1 >> deployment-with-dockerhub.yaml
-          echo   selector: >> deployment-with-dockerhub.yaml
-          echo     matchLabels: >> deployment-with-dockerhub.yaml
-          echo       app: book-management >> deployment-with-dockerhub.yaml
-          echo   template: >> deployment-with-dockerhub.yaml
-          echo     metadata: >> deployment-with-dockerhub.yaml
-          echo       labels: >> deployment-with-dockerhub.yaml
-          echo         app: book-management >> deployment-with-dockerhub.yaml
-          echo     spec: >> deployment-with-dockerhub.yaml
-          echo       containers: >> deployment-with-dockerhub.yaml
-          echo       - name: frontend >> deployment-with-dockerhub.yaml
-          echo         image: undergroundehsan/book-management-frontend:latest >> deployment-with-dockerhub.yaml
-          echo         ports: >> deployment-with-dockerhub.yaml
-          echo         - containerPort: 3000 >> deployment-with-dockerhub.yaml
+          echo Creating simple backend deployment...
+          kubectl create deployment backend --image=undergroundehsan/book-management-backend:latest --replicas=1
           
-          :: Apply Kubernetes resources
-          echo Applying Kubernetes resources...
+          echo Exposing services...
+          kubectl expose deployment frontend --port=3000 --target-port=3000 --name=frontend-service
+          kubectl expose deployment backend --port=5000 --target-port=5000 --name=backend-service
           
-          echo Applying configmap.yaml...
-          kubectl apply -f configmap.yaml
-          
-          echo Applying secrets.yaml...
-          kubectl apply -f secrets.yaml
-          
-          echo Applying pvc.yaml...
-          kubectl apply -f pvc.yaml
-          
-          echo Applying service.yaml...
-          kubectl apply -f service.yaml
-          
-          echo Applying deployment...
-          kubectl apply -f deployment-with-dockerhub.yaml
-          
-          :: Check deployment status
           echo Checking deployment status...
           kubectl get deployments
+          kubectl get services
           
-          echo Deployment completed!
+          echo "Deployment completed!"
         shell: cmd
         continue-on-error: true
 
@@ -200,9 +186,15 @@ jobs:
           echo "Getting Pod details..."
           kubectl get pods
           
+          echo "Waiting for Pods to become ready..."
+          timeout /t 30
+          
+          echo "Checking Pod status again..."
+          kubectl get pods
+          
           echo "Attempting to port forward..."
           start /b kubectl port-forward service/frontend-service 3000:3000
           
           echo "Deployment verification completed!"
         shell: cmd
-        continue-on-error: true 
+        continue-on-error: true
