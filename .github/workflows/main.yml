@@ -38,9 +38,14 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build Docker images
+      - name: Build Docker images locally
         run: |
-          echo "Building Docker images..."
+          echo "Building Docker images locally..."
+          
+          :: Pull basic images first
+          echo "Pulling common images..."
+          docker pull nginx:latest
+          docker pull mongo:latest
           
           :: Build frontend image
           echo "Building frontend image..."
@@ -49,9 +54,15 @@ jobs:
           :: Build backend image
           echo "Building backend image..."
           docker build -t undergroundehsan/book-management-backend:latest -f backend/Dockerfile ./backend
+          
+          :: Tag images with localhost registry for local use
+          docker tag nginx:latest localhost:5000/nginx:latest
+          docker tag mongo:latest localhost:5000/mongo:latest
+          docker tag undergroundehsan/book-management-frontend:latest localhost:5000/book-management-frontend:latest
+          docker tag undergroundehsan/book-management-backend:latest localhost:5000/book-management-backend:latest
         shell: cmd
 
-      - name: Push Docker images
+      - name: Push Docker images to Docker Hub
         run: |
           echo "Pushing images to Docker Hub..."
           docker push undergroundehsan/book-management-frontend:latest
@@ -69,8 +80,8 @@ jobs:
           echo "Cleaning Docker containers..."
           docker ps -a | findstr minikube && docker rm -f $(docker ps -a | findstr minikube | awk '{print $1}')
           
-          echo "Setting up Minikube with proper DNS configuration..."
-          minikube start --memory=2048 --cpus=2 --driver=docker --dns-domain="cluster.local" --addons=dashboard --addons=ingress --addons=ingress-dns
+          echo "Setting up Minikube with proper configuration..."
+          minikube start --memory=2048 --cpus=2 --driver=docker --dns-domain="cluster.local" --insecure-registry="localhost:5000" --addons=registry
           
           echo "Checking Minikube status..."
           minikube status
@@ -78,22 +89,46 @@ jobs:
           echo "Verifying DNS configuration..."
           minikube ssh -- cat /etc/resolv.conf
           
+          echo "Waiting for Minikube to be ready (30 seconds)..."
+          ping -n 30 127.0.0.1 > nul
+          
           echo "Updating kubectl context..."
           minikube update-context
-          
-          echo "Waiting for Minikube to be ready (45 seconds)..."
-          ping -n 45 127.0.0.1 > nul
           
           echo "Verifying API server accessibility..."
           minikube kubectl -- cluster-info
         shell: cmd
         continue-on-error: true
 
-      - name: Test Minikube with simple app
+      - name: Load images into Minikube
         run: |
-          echo "Testing Minikube with a basic nginx deployment..."
+          echo "Loading images directly into Minikube..."
           
-          :: Create a simple deployment
+          :: Cache images in Minikube
+          echo "Caching nginx image..."
+          minikube image load nginx:latest
+          
+          echo "Caching MongoDB image..."
+          minikube image load mongo:latest
+          
+          echo "Caching frontend image..."
+          minikube image load undergroundehsan/book-management-frontend:latest
+          
+          echo "Caching backend image..."
+          minikube image load undergroundehsan/book-management-backend:latest
+          
+          echo "Verifying cached images in Minikube..."
+          minikube image ls
+          
+          echo "Image loading completed!"
+        shell: cmd
+        continue-on-error: true
+
+      - name: Deploy test nginx app
+        run: |
+          echo "Deploying test nginx to verify Minikube functionality..."
+          
+          :: Create a simple deployment with local image
           echo apiVersion: apps/v1 > simple-deployment.yaml
           echo kind: Deployment >> simple-deployment.yaml
           echo metadata: >> simple-deployment.yaml
@@ -111,10 +146,11 @@ jobs:
           echo       containers: >> simple-deployment.yaml
           echo       - name: nginx >> simple-deployment.yaml
           echo         image: nginx:latest >> simple-deployment.yaml
+          echo         imagePullPolicy: IfNotPresent >> simple-deployment.yaml
           echo         ports: >> simple-deployment.yaml
           echo         - containerPort: 80 >> simple-deployment.yaml
           
-          :: Create service
+          :: Create service for test
           echo apiVersion: v1 > simple-service.yaml
           echo kind: Service >> simple-service.yaml
           echo metadata: >> simple-service.yaml
@@ -127,35 +163,26 @@ jobs:
           echo     targetPort: 80 >> simple-service.yaml
           echo   type: ClusterIP >> simple-service.yaml
           
-          :: Apply using minikube kubectl and check results
-          echo "Applying test deployment using minikube kubectl..."
+          :: Apply resources
+          echo "Applying test deployment..."
           minikube kubectl -- apply -f simple-deployment.yaml
-          
-          echo "Verifying test deployment was created..."
-          minikube kubectl -- get deployments
-          
-          echo "Applying test service..."
           minikube kubectl -- apply -f simple-service.yaml
           
-          echo "Verifying test service was created..."
-          minikube kubectl -- get services
+          echo "Waiting for test nginx pod to be ready (60 seconds)..."
+          ping -n 60 127.0.0.1 > nul
           
-          echo "Waiting for pod to be created (30 seconds)..."
-          ping -n 30 127.0.0.1 > nul
-          
-          echo "Checking pod status..."
+          echo "Checking test deployment status..."
           minikube kubectl -- get pods
           
-          echo "Test deployment completed! Minikube is working properly."
+          echo "Test deployment completed!"
         shell: cmd
         continue-on-error: true
 
-      - name: Deploy book management system
+      - name: Deploy MongoDB
         run: |
-          echo "Deploying Book Management System to Minikube..."
+          echo "Deploying MongoDB..."
           
-          :: Create MongoDB deployment
-          echo "Creating MongoDB deployment..."
+          :: Create MongoDB deployment with local image
           echo apiVersion: apps/v1 > mongodb-deployment.yaml
           echo kind: Deployment >> mongodb-deployment.yaml
           echo metadata: >> mongodb-deployment.yaml
@@ -178,14 +205,11 @@ jobs:
           echo       containers: >> mongodb-deployment.yaml
           echo       - name: mongodb >> mongodb-deployment.yaml
           echo         image: mongo:latest >> mongodb-deployment.yaml
+          echo         imagePullPolicy: IfNotPresent >> mongodb-deployment.yaml
           echo         ports: >> mongodb-deployment.yaml
           echo         - containerPort: 27017 >> mongodb-deployment.yaml
           
-          echo "Applying MongoDB deployment..."
-          minikube kubectl -- apply -f mongodb-deployment.yaml
-          
           :: Create MongoDB service
-          echo "Creating MongoDB service..."
           echo apiVersion: v1 > mongodb-service.yaml
           echo kind: Service >> mongodb-service.yaml
           echo metadata: >> mongodb-service.yaml
@@ -199,14 +223,26 @@ jobs:
           echo     targetPort: 27017 >> mongodb-service.yaml
           echo   type: ClusterIP >> mongodb-service.yaml
           
-          echo "Applying MongoDB service..."
+          :: Apply MongoDB resources
+          echo "Applying MongoDB deployment and service..."
+          minikube kubectl -- apply -f mongodb-deployment.yaml
           minikube kubectl -- apply -f mongodb-service.yaml
           
-          echo "Waiting for MongoDB to start (30 seconds)..."
-          ping -n 30 127.0.0.1 > nul
+          echo "Waiting for MongoDB to be ready (60 seconds)..."
+          ping -n 60 127.0.0.1 > nul
           
-          :: Create backend deployment
-          echo "Creating backend deployment..."
+          echo "Checking MongoDB status..."
+          minikube kubectl -- get pods -l tier=database
+          
+          echo "MongoDB deployment completed!"
+        shell: cmd
+        continue-on-error: true
+
+      - name: Deploy backend
+        run: |
+          echo "Deploying backend..."
+          
+          :: Create backend deployment with local image
           echo apiVersion: apps/v1 > backend-deployment.yaml
           echo kind: Deployment >> backend-deployment.yaml
           echo metadata: >> backend-deployment.yaml
@@ -229,17 +265,14 @@ jobs:
           echo       containers: >> backend-deployment.yaml
           echo       - name: backend >> backend-deployment.yaml
           echo         image: undergroundehsan/book-management-backend:latest >> backend-deployment.yaml
+          echo         imagePullPolicy: IfNotPresent >> backend-deployment.yaml
           echo         ports: >> backend-deployment.yaml
           echo         - containerPort: 5000 >> backend-deployment.yaml
           echo         env: >> backend-deployment.yaml
           echo         - name: MONGODB_URI >> backend-deployment.yaml
           echo           value: "mongodb://mongodb-service:27017/bookmanagement" >> backend-deployment.yaml
           
-          echo "Applying backend deployment..."
-          minikube kubectl -- apply -f backend-deployment.yaml
-          
           :: Create backend service
-          echo "Creating backend service..."
           echo apiVersion: v1 > backend-service.yaml
           echo kind: Service >> backend-service.yaml
           echo metadata: >> backend-service.yaml
@@ -253,14 +286,26 @@ jobs:
           echo     targetPort: 5000 >> backend-service.yaml
           echo   type: ClusterIP >> backend-service.yaml
           
-          echo "Applying backend service..."
+          :: Apply backend resources
+          echo "Applying backend deployment and service..."
+          minikube kubectl -- apply -f backend-deployment.yaml
           minikube kubectl -- apply -f backend-service.yaml
           
-          echo "Waiting for backend to start (30 seconds)..."
-          ping -n 30 127.0.0.1 > nul
+          echo "Waiting for backend to be ready (60 seconds)..."
+          ping -n 60 127.0.0.1 > nul
           
-          :: Create frontend deployment
-          echo "Creating frontend deployment..."
+          echo "Checking backend status..."
+          minikube kubectl -- get pods -l tier=backend
+          
+          echo "Backend deployment completed!"
+        shell: cmd
+        continue-on-error: true
+
+      - name: Deploy frontend
+        run: |
+          echo "Deploying frontend..."
+          
+          :: Create frontend deployment with local image
           echo apiVersion: apps/v1 > frontend-deployment.yaml
           echo kind: Deployment >> frontend-deployment.yaml
           echo metadata: >> frontend-deployment.yaml
@@ -283,17 +328,14 @@ jobs:
           echo       containers: >> frontend-deployment.yaml
           echo       - name: frontend >> frontend-deployment.yaml
           echo         image: undergroundehsan/book-management-frontend:latest >> frontend-deployment.yaml
+          echo         imagePullPolicy: IfNotPresent >> frontend-deployment.yaml
           echo         ports: >> frontend-deployment.yaml
           echo         - containerPort: 3000 >> frontend-deployment.yaml
           echo         env: >> frontend-deployment.yaml
           echo         - name: NEXT_PUBLIC_API_URL >> frontend-deployment.yaml
           echo           value: "http://backend-service:5000/api" >> frontend-deployment.yaml
           
-          echo "Applying frontend deployment..."
-          minikube kubectl -- apply -f frontend-deployment.yaml
-          
           :: Create frontend service
-          echo "Creating frontend service..."
           echo apiVersion: v1 > frontend-service.yaml
           echo kind: Service >> frontend-service.yaml
           echo metadata: >> frontend-service.yaml
@@ -307,10 +349,18 @@ jobs:
           echo     targetPort: 3000 >> frontend-service.yaml
           echo   type: NodePort >> frontend-service.yaml
           
-          echo "Applying frontend service..."
+          :: Apply frontend resources
+          echo "Applying frontend deployment and service..."
+          minikube kubectl -- apply -f frontend-deployment.yaml
           minikube kubectl -- apply -f frontend-service.yaml
           
-          echo "Book Management System deployment commands completed!"
+          echo "Waiting for frontend to be ready (60 seconds)..."
+          ping -n 60 127.0.0.1 > nul
+          
+          echo "Checking frontend status..."
+          minikube kubectl -- get pods -l tier=frontend
+          
+          echo "Frontend deployment completed!"
         shell: cmd
         continue-on-error: true
 
@@ -319,41 +369,40 @@ jobs:
           echo "Verifying Book Management System deployment..."
           minikube kubectl -- get all
           
-          echo "Waiting for all pods to be ready (60 seconds)..."
-          ping -n 60 127.0.0.1 > nul
+          echo "Waiting for all pods to be ready (120 seconds)..."
+          ping -n 120 127.0.0.1 > nul
           
-          echo "Checking pod status after waiting..."
+          echo "Checking all pod statuses..."
           minikube kubectl -- get pods
           
-          echo "Checking details of any pods not in Running state..."
-          FOR /F "tokens=1" %%i IN ('minikube kubectl -- get pods --no-headers ^| findstr -v "Running"') DO (
-            echo "Describing pod %%i:"
-            minikube kubectl -- describe pod %%i
-            echo "Logs for pod %%i:"
-            minikube kubectl -- logs %%i --tail=50
-          )
+          echo "Checking pod details..."
+          minikube kubectl -- describe pods
           
-          echo "Creating service URL for frontend access..."
+          echo "Attempt to access frontend service..."
+          minikube service list
           minikube service frontend-service --url
           
           echo "Deployment verification completed!"
-          
-          echo "To access the application locally, run:"
-          echo "minikube service frontend-service"
         shell: cmd
         continue-on-error: true
 
-      - name: Attach Minikube logs
+      - name: Debug pod status
         if: ${{ always() }}
         run: |
-          echo "Collecting Minikube logs for debugging..."
-          minikube logs > minikube-logs.txt
-          echo "Logs saved to minikube-logs.txt"
+          echo "Running diagnostics on Minikube..."
           
-          echo "Collecting Kubernetes component status..."
-          minikube kubectl -- get componentstatuses
+          echo "Checking Docker images:"
+          docker images
           
-          echo "Checking Docker Desktop resources..."
-          docker info
+          echo "Minikube node status:"
+          minikube node list
+          
+          echo "Checking resources in Minikube node:"
+          minikube ssh -- "df -h && free -m && top -bn1 | head -15"
+          
+          echo "Checking Kubernetes events:"
+          minikube kubectl -- get events --sort-by=.metadata.creationTimestamp
+          
+          echo "Debugging completed!"
         shell: cmd
         continue-on-error: true 
